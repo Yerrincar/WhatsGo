@@ -9,9 +9,9 @@ import (
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(20 * time.Second)) //Timeout if any read operation surpass 5 seconds
 	buffer := make([]byte, 1028)
 	for {
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second)) //Timeout if any read operation surpass 6 seconds
 		n, err := conn.Read(buffer)
 		if err != nil {
 			log.Print("Wait time over: ", err)
