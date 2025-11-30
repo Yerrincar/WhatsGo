@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"time"
+	"os"
 )
 
 type WorkerPool struct {
@@ -28,30 +30,55 @@ func (p *WorkerPool) worker() {
 	}
 }
 
-func readMessage(conn net.Conn) ([]byte, error) {
-	lenBuff := make([]byte, 4)
-	_, err := io.ReadFull(conn, lenBuff)
-	if err != nil {
-		return nil, err
-	}
-	length := binary.BigEndian.Uint32(lenBuff)
-	data := make([]byte, length)
-	_, err = io.ReadFull(conn, data)
-	fmt.Printf("Received %v\n", data)
-	return data, err
-}
+// func readMessage(conn net.Conn) ([]byte, error) {
+//	lenBuff := make([]byte, 4)
+//	_, err := io.ReadFull(conn, lenBuff)
+//	if err != nil {
+//		return nil, err
+//	}
+//	length := binary.BigEndian.Uint32(lenBuff)
+//	data := make([]byte, length)
+//	_, err = io.ReadFull(conn, data)
+//	if err != nil {
+//		fmt.Errorf("Error reading Message from cliente %w", err)
+//	}
+//	fmt.Printf("Received %v\n", data)
+//	return data, err
+//}
 
 func handleConnection(conn net.Conn) {
-	defer conn.Close()
 	for {
-		conn.SetReadDeadline(time.Now().Add(20 * time.Second)) //Timeout if any read operation surpass 6 seconds
-		data, err := readMessage(conn)
+		//header of the message first // lenght-prefix protocol
+		header := make([]byte, 4)
+		_, err := io.ReadFull(conn, header)
 		if err != nil {
-			log.Print("Wait time over: ", err)
-			return // close client connection
+			log.Printf("Error reading header  %v\n", err)
+			if errors.Is(err, io.EOF) {
+				fmt.Errorf("Error reading header from the server: %w", err)
+			}
 		}
-		fmt.Printf("Received %v\n", data)
-		conn.Write([]byte("Message received\n"))
+		length := binary.BigEndian.Uint32(header) //defining endianness
+		message := make([]byte, length)
+		_, err = io.ReadFull(conn, message)
+		if err != nil {
+			log.Fatalf("Couldn't read message %v\n", err)
+		}
+	}
+}
+
+func response(conn net.Conn) {
+	for {
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			log.Print("Impossible to read", err)
+		}
+		message := []byte(input)
+		length := len(message)
+		header := make([]byte, 4)
+		binary.BigEndian.PutUint32(header, uint32(length))
+		finalMessage := append(header, message...)
+		conn.Write(finalMessage)
 	}
 }
 
@@ -70,6 +97,7 @@ func main() {
 			continue
 		}
 		pool.tasks <- conn
+		//go response(conn)
 	}
 
 }
