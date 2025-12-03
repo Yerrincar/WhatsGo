@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +19,7 @@ func connectToServer() (net.Conn, error) {
 	return conn, nil
 }
 func writter(conn net.Conn) {
+	defer conn.Close()
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		input, err := reader.ReadString('\n')
@@ -37,15 +37,14 @@ func writter(conn net.Conn) {
 
 func listener(conn net.Conn) {
 
+	defer conn.Close()
 	for {
 		//header of the message first // lenght-prefix protocol
 		header := make([]byte, 4)
 		_, err := io.ReadFull(conn, header)
 		if err != nil {
 			log.Printf("Error reading header  %v\n", err)
-			if errors.Is(err, io.EOF) {
-				fmt.Errorf("Error reading header from the server: %w", err)
-			}
+			return
 		}
 		length := binary.BigEndian.Uint32(header) //defining endianness
 		message := make([]byte, length)
@@ -53,6 +52,7 @@ func listener(conn net.Conn) {
 		if err != nil {
 			log.Fatalf("Couldn't read message %v\n", err)
 		}
+		fmt.Printf("%s\n", message)
 	}
 }
 

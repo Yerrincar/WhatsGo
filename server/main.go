@@ -1,22 +1,24 @@
 package main
 
 import (
-	"bufio"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"os"
 )
 
 type WorkerPool struct {
-	tasks chan net.Conn //channel used to send and receive network related operations
+	tasks   chan net.Conn //channel used to send and receive network related operations
+	manager *clientManager
 }
 
-func NewWorkerPool(size int) *WorkerPool {
-	pool := &WorkerPool{tasks: make(chan net.Conn, 100)} // use of & to obtain the memory address of the struct
+type clientManager struct {
+	clients map[net.Conn]bool
+}
+
+func NewWorkerPool(size int, manager *clientManager) *WorkerPool {
+	pool := &WorkerPool{tasks: make(chan net.Conn, 100), manager: manager} // use of & to obtain the memory address of the struct
 	for i := 0; i < size; i++ {
 		go pool.worker()
 	}
@@ -25,79 +27,78 @@ func NewWorkerPool(size int) *WorkerPool {
 
 // worker method since a receiver was added between func and the name function
 func (p *WorkerPool) worker() {
+
 	for conn := range p.tasks {
-		handleConnection(conn)
+		handleConnection(conn, p.manager)
 	}
 }
 
-// func readMessage(conn net.Conn) ([]byte, error) {
-//	lenBuff := make([]byte, 4)
-//	_, err := io.ReadFull(conn, lenBuff)
-//	if err != nil {
-//		return nil, err
-//	}
-//	length := binary.BigEndian.Uint32(lenBuff)
-//	data := make([]byte, length)
-//	_, err = io.ReadFull(conn, data)
-//	if err != nil {
-//		fmt.Errorf("Error reading Message from cliente %w", err)
-//	}
-//	fmt.Printf("Received %v\n", data)
-//	return data, err
-//}
-
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, c *clientManager) {
+	defer conn.Close()
+	c.clients[conn] = true
+	c.broadcastMessage(conn, fmt.Sprintf("New connection from %s\n", conn.RemoteAddr().String()))
 	for {
 		//header of the message first // lenght-prefix protocol
 		header := make([]byte, 4)
 		_, err := io.ReadFull(conn, header)
 		if err != nil {
 			log.Printf("Error reading header  %v\n", err)
-			if errors.Is(err, io.EOF) {
-				fmt.Errorf("Error reading header from the server: %w", err)
-			}
+			return
 		}
 		length := binary.BigEndian.Uint32(header) //defining endianness
 		message := make([]byte, length)
-		_, err = io.ReadFull(conn, message)
-		if err != nil {
+		n, err := io.ReadFull(conn, message)
+		if err != nil || n == 0 {
+			delete(c.clients, conn)
+			c.broadcastMessage(conn, fmt.Sprintf("Client disconnected %s\n", conn.RemoteAddr().String()))
 			log.Fatalf("Couldn't read message %v\n", err)
 		}
+		c.broadcastMessage(conn, fmt.Sprintf("%s: %s", conn.RemoteAddr().String(), string(message[:n])))
 	}
 }
 
-func response(conn net.Conn) {
-	for {
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			log.Print("Impossible to read", err)
+func (c *clientManager) broadcastMessage(sender net.Conn, message string) {
+	for conn := range c.clients {
+		if conn == sender {
+			continue
 		}
-		message := []byte(input)
 		length := len(message)
 		header := make([]byte, 4)
 		binary.BigEndian.PutUint32(header, uint32(length))
 		finalMessage := append(header, message...)
-		conn.Write(finalMessage)
+		_, err := conn.Write(finalMessage)
+		if err != nil {
+			delete(c.clients, conn)
+			fmt.Printf("Could not write message")
+		}
 	}
 }
 
 func main() {
-	ln, err := net.Listen("tcp", ":8080")
+	const addr = "localhost:8080"
+	fmt.Println("Starting TCP Server on port " + addr)
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
-		log.Fatalf("Unable to connect %v", err)
+		log.Fatalf("Could not resolve address: %s", err.Error())
 	}
+
+	ln, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		log.Fatalf("Error starting server: %s", err.Error())
+	}
+
 	defer ln.Close()
-	pool := NewWorkerPool(10)
-	log.Printf("Listening to TCP connections on port :8080")
+	manager := &clientManager{clients: make(map[net.Conn]bool)}
+	pool := NewWorkerPool(10, manager)
+
 	for {
-		conn, err := ln.Accept()
+		conn, err := ln.AcceptTCP()
 		if err != nil {
 			log.Fatalf("Unable to listen")
 			continue
 		}
 		pool.tasks <- conn
-		//go response(conn)
 	}
 
 }
